@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Governed second brain — redacted Claude Code session notes into Cortex.",
-    "version": "0.6.5"
+    "version": "0.6.6"
   },
   "plugins": [
     {
       "name": "second-brain-capture",
       "source": "./second-brain-capture",
       "description": "Captures redacted Claude Code session activity and pushes one curated note per session into a Cortex knowledge base. Redaction is proxied through Cortex (OAuth) to a private AxonFlow agent, so capture works off-VPN; only redacted notes reach Cortex.",
-      "version": "0.6.5",
+      "version": "0.6.6",
       "author": {
         "name": "BukuWarung"
       },
