@@ -7,13 +7,15 @@ Redaction is proxied through Cortex (OAuth) to a private AxonFlow agent, so capt
 ## How it works
 
 ```
-PostToolUse  ──▶  redact via Cortex /redact proxy  ──▶  per-session buffer (clean content only)
-Stop         ──▶  summarize the buffer  ──▶  upsert ONE note per session into the Cortex KB (OAuth)
-SessionEnd   ──▶  final flush of the same note
+UserPromptSubmit ──▶ redact via Cortex /redact proxy ──▶ per-session buffer (clean content only)
+PostToolUse      ──▶ redact via Cortex /redact proxy ──▶ same buffer
+Stop             ──▶ summarize the buffer ──▶ upsert ONE note per session into the Cortex KB (OAuth)
+SessionEnd       ──▶ final flush of the same note
 ```
 
 - **One note per session.** The first flush creates a record; later flushes update it in place, so a session maps to a single, growing note (not a pile of duplicates).
 - **Redact at source.** Every captured event is sent to Cortex's `/redact` proxy (which forwards to an in-VPC AxonFlow agent and returns only the redacted text). A per-session canary probe confirms redaction is actually on before anything is trusted; if not, capture drops for that session.
+- **Prompts captured too.** The user's own requests (UserPromptSubmit) are buffered through the same redact-first pipeline, so notes record what was *asked*, not just what tools ran — the digest gets a "What was asked" section and the LLM summary grounds intent in the real prompts. Toggle off with `SECOND_BRAIN_CAPTURE_PROMPTS=0`.
 - **Secret scrubbing.** High-confidence secret tokens (`sk_…`, `AKIA…`, `gh*_…`, `xox*-…`, JWTs) are scrubbed client-side before buffering, on top of the PII redaction.
 
 ## Commands
@@ -69,11 +71,13 @@ All optional except the OAuth credentials. Explicit `SECOND_BRAIN_*` env wins ov
 | `SECOND_BRAIN_SUMMARIZER_MODEL` | `claude-haiku-4-5` | Model used for the `claude -p` summary upgrade. |
 | `SECOND_BRAIN_AUTHOR` | git email / `$USER` | Author attribution stamped on each note. |
 | `SECOND_BRAIN_EXCLUDE_TOOLS` | — | Comma-separated tool names to skip. |
+| `SECOND_BRAIN_CAPTURE_PROMPTS` | `1` | `0` stops capturing the user's prompts (tool events still captured). |
+| `SECOND_BRAIN_PROMPT_MAX_CHARS` | `1500` | Per-prompt capture cap (a pasted log can't balloon the note). |
 | `SECOND_BRAIN_LOG` | — | `1` writes a tailable log to `~/.local/state/second-brain-capture/second-brain.log`. |
 
 ## Privacy
 
-- One shared KB; each note is tagged with the author's git email. Anyone with KB access can read the notes.
+- One shared KB; each note is tagged with the author's git email. Anyone with KB access can read the notes — including the redacted text of your prompts (disable with `SECOND_BRAIN_CAPTURE_PROMPTS=0`).
 - Redaction is proxied over OAuth + TLS; raw event text transits to Cortex only to be redacted, and is not persisted there. If Cortex is unreachable, capture fails closed (drops — nothing leaks).
 - Opt-in and pausable at any time (`SECOND_BRAIN_ENABLED=0`).
 
