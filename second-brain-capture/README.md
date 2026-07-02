@@ -16,6 +16,11 @@ SessionEnd   ──▶  final flush of the same note
 - **Redact at source.** Every captured event is sent to Cortex's `/redact` proxy (which forwards to an in-VPC AxonFlow agent and returns only the redacted text). A per-session canary probe confirms redaction is actually on before anything is trusted; if not, capture drops for that session.
 - **Secret scrubbing.** High-confidence secret tokens (`sk_…`, `AKIA…`, `gh*_…`, `xox*-…`, JWTs) are scrubbed client-side before buffering, on top of the PII redaction.
 
+## Commands
+
+- **`/second-brain-capture:setup`** — one-time credential setup (single-machine installs; fleet installs skip this).
+- **`/second-brain-capture:save`** — save something from the current conversation into the team KB on demand: a summary you just produced, a Slack thread or email digest, a meeting transcript, a decision. Claude curates it into one self-contained note, the same redact→scrub pipeline runs (fail-closed), and the note is upserted by slug — re-saving the same topic updates one record, and byte-identical content is deduped client-side and never re-uploaded. Notes land in the org-visible Team Second Brain KB by default, so the command confirms with you before saving anything that looks personal or sensitive.
+
 ## Install
 
 ### Fleet (recommended, zero-touch)
