@@ -45,7 +45,7 @@ sb__transcript() {
 # touched / Commands run / Capabilities) so the SessionEnd upgrade reads as a
 # richer, synthesized version of the same note rather than a different shape.
 sb__summary_prompt() {
-  printf 'You are writing ONE concise knowledge-base note from a Claude Code developer session. The events below are already PII-redacted: preserve any [REDACTED:...] placeholders verbatim and never invent values. Output GitHub-flavored markdown with the sections below, omitting any that would be empty. Do NOT add a top-level # heading (the note already has one).\n\n## Summary\nOne or two sentences: what this session set out to do and what came of it.\n\n## What happened\n3-6 bullets on what was built, changed, debugged, decided, or learned. Synthesize across events; do not just relist them.\n\n### Files touched\nThe files created or modified, each with a few words on what changed.\n\n### Commands run\nThe notable shell commands and what they accomplished (skip trivial or duplicate ones).\n\n**Capabilities:** a comma-separated list of skills/tools demonstrated, for a team capability directory.\n\nKeep it factual and skimmable.'
+  printf 'You are writing ONE concise knowledge-base note from a Claude Code developer session. The events below are already PII-redacted: preserve any [REDACTED:...] placeholders verbatim and never invent values. Events tagged [UserPrompt] are the user'\''s own requests to Claude, in order — they are the ground truth for intent; everything else is what Claude did in response. Output GitHub-flavored markdown with the sections below, omitting any that would be empty. Do NOT add a top-level # heading (the note already has one).\n\n## Summary\nOne or two sentences: what this session set out to do and what came of it. Ground this in the [UserPrompt] events when present, not a guess from the tool activity.\n\n## What was asked\n2-5 bullets: the user'\''s requests/questions in their own framing, in order, deduplicating follow-ups on the same ask. Paraphrase tightly; quote short memorable phrasing where it helps.\n\n## What happened\n3-6 bullets on what was built, changed, debugged, decided, or learned. Synthesize across events; do not just relist them. Where an outcome answers one of the asks above, make that connection explicit.\n\n### Files touched\nThe files created or modified, each with a few words on what changed.\n\n### Commands run\nThe notable shell commands and what they accomplished (skip trivial or duplicate ones).\n\n**Capabilities:** a comma-separated list of skills/tools demonstrated, for a team capability directory.\n\nKeep it factual and skimmable.'
 }
 
 # Accept an LLM reply as a real note ONLY if it contains one of the sections the
@@ -54,7 +54,7 @@ sb__summary_prompt() {
 # note — that has none of these headers, so we reject it and let the deterministic
 # digest stand rather than overwrite a good note with a refusal. 0 = looks valid.
 sb__looks_like_summary() {
-  printf '%s' "$1" | grep -qiE '(^|\n)#{1,3}[[:space:]]+(Summary|What happened|Files touched|Commands run)([[:space:]]|$)|(^|\n)\*\*Capabilities'
+  printf '%s' "$1" | grep -qiE '(^|\n)#{1,3}[[:space:]]+(Summary|What was asked|What happened|Files touched|Commands run)([[:space:]]|$)|(^|\n)\*\*Capabilities'
 }
 
 # Deterministic, LLM-free digest. Used as the per-turn instant note and the final
@@ -73,6 +73,7 @@ sb__fallback_summary() {
      --argjson maxact "${SECOND_BRAIN_DIGEST_MAX_EVENTS:-12}" \
      --argjson maxfiles "${SECOND_BRAIN_DIGEST_MAX_FILES:-25}" \
      --argjson maxcmds "${SECOND_BRAIN_DIGEST_MAX_COMMANDS:-20}" \
+     --argjson maxasks "${SECOND_BRAIN_DIGEST_MAX_PROMPTS:-10}" \
      "$SB__NORM"'
     def oneline($n): gsub("\\s+"; " ") | gsub("^ +| +$"; "")
                      | (if length > $n then .[0:$n] + "…" else . end);
@@ -83,16 +84,21 @@ sb__fallback_summary() {
     | ($ev | length) as $n
     | ($ev | group_by(.tool) | map({t: .[0].tool, c: length}) | sort_by(-.c)
         | map("\(.t) ×\(.c)") | join(" · ")) as $tally
+    | ($ev | map(select(.tool == "UserPrompt" and (.input | length) > 0) | .input)
+        | map("- \(. | oneline(240))")) as $asks
     | ($ev | map(select(isfile(.tool) and (.input | length) > 0))
         | group_by(.input)
         | map("- `\(.[0].input)` — " + ((map(.tool) | unique) | join(", ")))) as $files
     | ($ev | map(select(.tool == "Bash" and (.input | length) > 0) | .input) | unique
         | map("- `\(. | oneline(160))`")) as $cmds
-    | ($ev | map(select((.input | length) > 0)
+    | ($ev | map(select(.tool != "UserPrompt" and (.input | length) > 0)
         | "- **\(.tool)** `\(.input | oneline(120))`")) as $act
+    | ($asks | length) as $nk
     | ($files | length) as $nf | ($cmds | length) as $nc | ($act | length) as $na
     | "## Session activity (auto-digest)\n"
       + "\n**\($n) event\(plural($n))** · " + $tally + "\n"
+      + (if $nk > 0 then "\n### What was asked\n" + ($asks[0:$maxasks] | join("\n"))
+           + (if $nk > $maxasks then "\n- _… \($nk - $maxasks) more_" else "" end) + "\n" else "" end)
       + (if $nf > 0 then "\n### Files touched\n" + ($files[0:$maxfiles] | join("\n"))
            + (if $nf > $maxfiles then "\n- _… \($nf - $maxfiles) more_" else "" end) + "\n" else "" end)
       + (if $nc > 0 then "\n### Commands run\n" + ($cmds[0:$maxcmds] | join("\n"))

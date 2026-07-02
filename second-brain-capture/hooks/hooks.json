@@ -1,6 +1,17 @@
 {
-  "description": "second-brain-capture: redact-at-source capture (PostToolUse), incremental instant-digest push per turn (Stop), and final flush + best-effort LLM upgrade (SessionEnd).",
+  "description": "second-brain-capture: redact-at-source capture of prompts (UserPromptSubmit) + tool events (PostToolUse), incremental instant-digest push per turn (Stop), and final flush + best-effort LLM upgrade (SessionEnd).",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/capture-prompt.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash|Write|Edit|NotebookEdit|mcp__.*",
