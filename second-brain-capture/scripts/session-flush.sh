@@ -35,6 +35,7 @@ sb_gc_stale_state
 INPUT="$(cat 2>/dev/null)"
 SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
 [ -z "$SESSION_ID" ] && SESSION_ID="no-session"
+TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
 
 # Runs on BOTH Stop (end of every turn, incremental — buffer kept) and SessionEnd
 # (final — buffer cleared). Relying on SessionEnd alone would mean notes never
@@ -106,6 +107,15 @@ else
   BODY="$(sb_summarize "$BUFFER")"
 fi
 
+# Per-session token totals from the Claude Code transcript. Computed once per
+# flush and appended to every render; refreshed on each upsert so the note ends
+# with the session's final numbers. Pure numbers, deterministic (never touches
+# the LLM body), best-effort — an unreadable transcript just omits the section.
+USAGE_MD=""
+if [ "${SECOND_BRAIN_TOKEN_USAGE:-1}" != "0" ]; then
+  USAGE_MD="$(sb_token_usage "$TRANSCRIPT_PATH")"
+fi
+
 # Render a note file from a body. Reused for the digest push and the in-place
 # LLM upgrade so both carry the same header/provenance.
 sb_render_note() {  # $1=outfile  $2=body
@@ -114,6 +124,7 @@ sb_render_note() {  # $1=outfile  $2=body
     printf '_session: %s_\n\n' "$SESSION_ID"
     [ "$DROPPED" != "0" ] && printf '> Note: %s event(s) omitted because redaction could not be verified.\n\n' "$DROPPED"
     printf '%s\n' "$2"
+    [ -n "$USAGE_MD" ] && printf '\n%s\n' "$USAGE_MD"
   } > "$1"
 }
 

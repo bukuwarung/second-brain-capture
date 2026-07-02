@@ -108,6 +108,48 @@ sb__fallback_summary() {
   ' "$buffer" 2>/dev/null
 }
 
+# Deterministic per-session token-usage section, computed from the Claude Code
+# session transcript (the Stop/SessionEnd hook payload carries transcript_path).
+# Pure numbers — no content leaves the machine and nothing needs redaction. The
+# transcript writes the SAME assistant message on multiple lines as it streams,
+# so entries are deduped by message id (keeping the last = final totals) before
+# summing; without that the counts triple. Subagent (sidechain) entries share
+# the transcript and are included — this is the session's TOTAL consumption.
+# Echoes a markdown section (empty + rc 1 when the transcript is unreadable).
+sb_token_usage() {
+  local tp="$1"
+  [ -n "$tp" ] && [ -r "$tp" ] || return 1
+  jq -rs '
+    def hfmt: if . >= 10000000 then "\(. / 1000000 | floor)M"
+      elif . >= 1000000 then "\((. * 10 / 1000000 | floor) / 10)M"
+      elif . >= 10000 then "\(. / 1000 | floor)K"
+      elif . >= 1000 then "\((. * 10 / 1000 | floor) / 10)K"
+      else tostring end;
+    def plural($n): if $n == 1 then "" else "s" end;
+
+    [ .[] | select(.type=="assistant" and .message.usage) ]
+    | group_by(.message.id // .uuid) | map(.[-1])          # dedup streamed rewrites
+    | map({m: (.message.model // "?"), u: .message.usage})
+    | group_by(.m)
+    | map({model: .[0].m, n: length,
+           i:  (map(.u.input_tokens // 0) | add),
+           o:  (map(.u.output_tokens // 0) | add),
+           cr: (map(.u.cache_read_input_tokens // 0) | add),
+           cw: (map(.u.cache_creation_input_tokens // 0) | add)})
+    | sort_by(-.o) as $per
+    | ($per | map(.n) | add // 0) as $n
+    | if $n == 0 then empty else
+        "### Token usage\n"
+        + "**\($n) request\(plural($n))** · in \($per | map(.i) | add | hfmt)"
+        + " (cache-read \($per | map(.cr) | add | hfmt), cache-write \($per | map(.cw) | add | hfmt))"
+        + " · out \($per | map(.o) | add | hfmt)\n"
+        + (if ($per | length) > 1 then
+            ($per | map("- `\(.model)` — \(.n) request\(plural(.n)) · in \(.i | hfmt) · out \(.o | hfmt)") | join("\n")) + "\n"
+           else "" end)
+      end
+  ' "$tp" 2>/dev/null
+}
+
 # `claude -p` headless. Sets SECOND_BRAIN_SUMMARIZING=1 so the recursion guard
 # in capture-event.sh and session-flush.sh keeps the inner session from
 # re-capturing itself. --disallowedTools blocks every code-using tool — the
