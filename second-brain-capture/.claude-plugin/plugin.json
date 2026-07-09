@@ -1,7 +1,7 @@
 {
   "name": "second-brain-capture",
   "description": "Captures redacted Claude Code session activity and pushes one curated note per session into a Cortex knowledge base. Redaction is proxied through Cortex (OAuth) to a private AxonFlow agent, so capture works off-VPN; only redacted notes reach Cortex. Includes /save to push curated notes (summaries, threads, transcripts) into the team KB on demand.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": {
     "name": "BukuWarung"
   },
