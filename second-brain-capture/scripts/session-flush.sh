@@ -137,11 +137,18 @@ sb_render_note() {  # $1=outfile  $2=body
 # reintroduce a per-turn model call. A transient failure simply refreshes on the
 # next window instead of retrying every turn.
 sb_try_llm_upgrade() {  # $1 = record id to update in place
-  local rid="$1" upbody uphttp
+  local rid="$1" upbody uphttp up_updated_at up_last_modified_ms up_files_meta
   sb_ensure_buffer_dir && date +%s > "$(sb_summary_marker "$SESSION_ID")" 2>/dev/null
   upbody="$(sb_summarize_llm "$BUFFER")"
   if [ -z "$upbody" ]; then
     sb_log "flush: no LLM upgrade (offline/unavailable); digest note stands for $SESSION_ID"
+    return 0
+  fi
+  up_updated_at="$(sb_utc_now)"
+  up_last_modified_ms="$(sb_epoch_ms_now)"
+  up_files_meta="$(sb_note_files_metadata "$NOTE_FILE_PATH" "$up_last_modified_ms" "$AUTHOR" "$CREATED_AT" "$up_updated_at" "session-note" "session_id" "$SESSION_ID")"
+  if [ -z "$up_files_meta" ]; then
+    sb_log "flush: could not build LLM upgrade metadata for $SESSION_ID; digest note stands"
     return 0
   fi
   # Persist the summary so every later flush (incl. SessionEnd) pushes IT, not a
@@ -152,9 +159,19 @@ sb_try_llm_upgrade() {  # $1 = record id to update in place
   uphttp="$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' \
     -X PUT "$(sb_record_update_url "$rid")" \
     -H "Authorization: Bearer ${TOKEN}" \
-    -F "file=@${NOTE_FILE2};type=text/markdown;filename=${NOTE_SLUG}.md" \
+    -F "file=@${NOTE_FILE2};type=text/markdown;filename=${NOTE_FILE_PATH}" \
     -F "recordName=${RECORD_NAME}" \
+    -F "files_metadata=${up_files_meta}" \
     2>/dev/null)" || uphttp=""
+  if [ "$uphttp" = "400" ] || [ "$uphttp" = "422" ]; then
+    sb_log "flush: LLM upgrade rejected files_metadata (http=$uphttp) for $SESSION_ID; retrying without metadata"
+    uphttp="$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' \
+      -X PUT "$(sb_record_update_url "$rid")" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -F "file=@${NOTE_FILE2};type=text/markdown;filename=${NOTE_FILE_PATH}" \
+      -F "recordName=${RECORD_NAME}" \
+      2>/dev/null)" || uphttp=""
+  fi
   if [ "$uphttp" = "200" ] || [ "$uphttp" = "201" ]; then
     sb_log "flush: LLM summary upgrade pushed (http=$uphttp) for $SESSION_ID"
   else
@@ -180,6 +197,13 @@ RECORD_NAME="Session note - ${AUTHOR} - ${DAY} - ${SESSION_ID:0:8}"
 # and rename the record) and uniform, so the KB shows "session-note-<id8>" instead
 # of a raw session UUID. Author + date still ride in the note's in-body H1 header.
 NOTE_SLUG="session-note-${SESSION_ID:0:8}"
+NOTE_FILE_PATH="${NOTE_SLUG}.md"
+CREATED_AT_FILE="$(sb_session_created_at_file "$SESSION_ID")"
+CREATED_AT="$(sb_existing_created_at_or_now "$CREATED_AT_FILE")"
+UPDATED_AT="$(sb_utc_now)"
+LAST_MODIFIED_MS="$(sb_epoch_ms_now)"
+FILES_META="$(sb_note_files_metadata "$NOTE_FILE_PATH" "$LAST_MODIFIED_MS" "$AUTHOR" "$CREATED_AT" "$UPDATED_AT" "session-note" "session_id" "$SESSION_ID")"
+[ -n "$FILES_META" ] || { sb_log "flush: could not build upload metadata for $SESSION_ID; keeping buffer"; exit 0; }
 
 # Fail-closed: no token, no push.
 TOKEN="$(sb_cortex_token)" || { sb_log "flush: no token; keeping buffer for $SESSION_ID"; exit 0; }
@@ -201,9 +225,19 @@ if [ -n "$RID" ]; then
   HTTP="$(curl -sS --max-time 30 -o "$RESP_FILE" -w '%{http_code}' \
     -X PUT "$(sb_record_update_url "$RID")" \
     -H "Authorization: Bearer ${TOKEN}" \
-    -F "file=@${NOTE_FILE};type=text/markdown;filename=${NOTE_SLUG}.md" \
+    -F "file=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
     -F "recordName=${RECORD_NAME}" \
+    -F "files_metadata=${FILES_META}" \
     2>/dev/null)" || HTTP=""
+  if [ "$HTTP" = "400" ] || [ "$HTTP" = "422" ]; then
+    sb_log "flush: update rejected files_metadata (http=$HTTP) for $SESSION_ID; retrying without metadata"
+    HTTP="$(curl -sS --max-time 30 -o "$RESP_FILE" -w '%{http_code}' \
+      -X PUT "$(sb_record_update_url "$RID")" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -F "file=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
+      -F "recordName=${RECORD_NAME}" \
+      2>/dev/null)" || HTTP=""
+  fi
   # If the record was deleted upstream, drop the stale id and recreate below.
   if [ "$HTTP" = "404" ]; then
     sb_log "flush: record $RID gone (404) for $SESSION_ID; recreating"
@@ -214,18 +248,28 @@ fi
 if [ -z "$RID" ]; then
   # First flush of the session — CREATE the record. file_path/isVersioned drive
   # storage-level blob versioning; recordName is for display.
-  FILES_META="$(jq -nc --arg fp "${NOTE_SLUG}.md" --argjson lm "$(( $(date +%s) * 1000 ))" \
-    '[{file_path:$fp, last_modified:$lm}]')"
   HTTP="$(curl -sS --max-time 30 -o "$RESP_FILE" -w '%{http_code}' \
     -X POST "$(sb_upload_url)" \
     -H "Authorization: Bearer ${TOKEN}" \
-    -F "files=@${NOTE_FILE};type=text/markdown;filename=${NOTE_SLUG}.md" \
+    -F "files=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
     -F "recordName=${RECORD_NAME}" \
     -F "recordType=FILE" \
     -F "origin=UPLOAD" \
     -F "isVersioned=true" \
     -F "files_metadata=${FILES_META}" \
     2>/dev/null)" || HTTP=""
+  if [ "$HTTP" = "400" ] || [ "$HTTP" = "422" ]; then
+    sb_log "flush: create rejected files_metadata (http=$HTTP) for $SESSION_ID; retrying without metadata"
+    HTTP="$(curl -sS --max-time 30 -o "$RESP_FILE" -w '%{http_code}' \
+      -X POST "$(sb_upload_url)" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -F "files=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
+      -F "recordName=${RECORD_NAME}" \
+      -F "recordType=FILE" \
+      -F "origin=UPLOAD" \
+      -F "isVersioned=true" \
+      2>/dev/null)" || HTTP=""
+  fi
   if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then
     # Persist the new record id so the NEXT flush updates it in place instead of
     # creating a duplicate. Without this id we'd be back to one-record-per-flush.
@@ -240,6 +284,7 @@ fi
 
 if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then
   sb_log "flush: pushed session $SESSION_ID (http=$HTTP event=${HOOK_EVENT:-?} final=$FINAL mode=$MODE)"
+  sb_persist_created_at "$CREATED_AT_FILE" "$CREATED_AT"
 
   # Layer the curated LLM summary ON TOP of the digest that just landed — but
   # only on the LIVE session (a Stop flush), NEVER at SessionEnd. SessionEnd is

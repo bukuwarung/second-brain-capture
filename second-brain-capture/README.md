@@ -70,16 +70,18 @@ All optional except the OAuth credentials. Explicit `SECOND_BRAIN_*` env wins ov
 | `SECOND_BRAIN_KB_ID` | Team KB | Target knowledge base for session notes. |
 | `SECOND_BRAIN_OFFLINE` | `0` | `1` forces the deterministic digest (no LLM summarization). |
 | `SECOND_BRAIN_SUMMARIZER_MODEL` | `claude-haiku-4-5` | Model used for the `claude -p` summary upgrade. |
-| `SECOND_BRAIN_AUTHOR` | git email / `$USER` | Author attribution stamped on each note. |
+| `SECOND_BRAIN_AUTHOR` | git email / `$USER` | Author attribution stamped on each note and included in structured metadata when accepted. |
 | `SECOND_BRAIN_EXCLUDE_TOOLS` | — | Comma-separated tool names to skip. |
 | `SECOND_BRAIN_CAPTURE_PROMPTS` | `1` | `0` stops capturing the user's prompts (tool events still captured). |
 | `SECOND_BRAIN_PROMPT_MAX_CHARS` | `1500` | Per-prompt capture cap (a pasted log can't balloon the note). |
 | `SECOND_BRAIN_TOKEN_USAGE` | `1` | `0` omits the per-session "Token usage" section from notes. |
 | `SECOND_BRAIN_LOG` | — | `1` writes a tailable log to `~/.local/state/second-brain-capture/second-brain.log`. |
 
+When Cortex accepts file metadata, uploaded records include structured metadata for filtering and provenance: `author`, `author_email`, `username`, `created_at`, `updated_at`, `source`, `plugin_version`, `note_type`, plus `session_id` for session notes or `save_slug` for manual saves. Human-readable author/date provenance stays in the markdown body for KB browsing.
+
 ## Privacy
 
-- One shared KB; each note is tagged with the author's git email. Anyone with KB access can read the notes — including the redacted text of your prompts (disable with `SECOND_BRAIN_CAPTURE_PROMPTS=0`).
+- One shared KB; each note is tagged with the configured author (usually git email); `author_email` is included when available. Anyone with KB access can read the notes — including the redacted text of your prompts (disable with `SECOND_BRAIN_CAPTURE_PROMPTS=0`).
 - Redaction is proxied over OAuth + TLS; raw event text transits to Cortex only to be redacted, and is not persisted there. If Cortex is unreachable, capture fails closed (drops — nothing leaks).
 - Opt-in and pausable at any time (`SECOND_BRAIN_ENABLED=0`).
 

@@ -306,6 +306,94 @@ sb_author() {
   printf '%s' "${email:-${USER:-unknown}}"
 }
 
+sb_plugin_version() {
+  local script_dir plugin_json version
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  plugin_json="${script_dir}/../.claude-plugin/plugin.json"
+  if command -v jq >/dev/null 2>&1 && [ -r "$plugin_json" ]; then
+    version="$(jq -r '.version // empty' "$plugin_json" 2>/dev/null)" && [ -n "$version" ] && {
+      printf '%s' "$version"
+      return 0
+    }
+  fi
+  printf 'unknown'
+}
+
+sb_author_email() {  # $1=author
+  case "${1:-}" in
+    *@*.*) printf '%s' "$1" ;;
+    *) printf '' ;;
+  esac
+}
+
+sb_username() {  # $1=author
+  local email
+  email="$(sb_author_email "${1:-}")"
+  if [ -n "$email" ]; then
+    printf '%s' "${email%@*}"
+  else
+    printf '%s' "${1:-unknown}"
+  fi
+}
+
+sb_utc_now() {
+  date -u +%FT%TZ 2>/dev/null || printf 'unknown'
+}
+
+sb_epoch_ms_now() {
+  printf '%s000' "$(date +%s 2>/dev/null || printf 0)"
+}
+
+sb_session_created_at_file() {  # $1=session_id
+  printf '%s/%s.created_at' "${SB_BUFFER_DIR}" "${1:-unknown}"
+}
+
+sb_existing_created_at_or_now() {  # $1=marker_file
+  if [ -s "$1" ]; then
+    cat "$1" 2>/dev/null
+  else
+    sb_utc_now
+  fi
+}
+
+sb_persist_created_at() {  # $1=marker_file $2=created_at
+  mkdir -p "${1%/*}" 2>/dev/null && printf '%s' "$2" > "$1" 2>/dev/null
+  return 0
+}
+
+sb_note_files_metadata() {  # $1=file_path $2=last_modified_ms $3=author $4=created_at $5=updated_at $6=note_type $7=id_key $8=id_value
+  local file_path="$1" last_modified="$2" author="$3" created_at="$4" updated_at="$5" note_type="$6" id_key="${7:-}" id_value="${8:-}"
+  local author_email username plugin_version
+  author_email="$(sb_author_email "$author")"
+  username="$(sb_username "$author")"
+  plugin_version="$(sb_plugin_version)"
+  jq -nc \
+    --arg fp "$file_path" \
+    --argjson lm "$last_modified" \
+    --arg author "$author" \
+    --arg author_email "$author_email" \
+    --arg username "$username" \
+    --arg created_at "$created_at" \
+    --arg updated_at "$updated_at" \
+    --arg source "second-brain-capture" \
+    --arg plugin_version "$plugin_version" \
+    --arg note_type "$note_type" \
+    --arg id_key "$id_key" \
+    --arg id_value "$id_value" \
+    '[{
+      file_path:$fp,
+      last_modified:$lm,
+      author:$author,
+      author_email:$author_email,
+      username:$username,
+      created_at:$created_at,
+      updated_at:$updated_at,
+      source:$source,
+      plugin_version:$plugin_version,
+      note_type:$note_type
+    } + (if $id_key == "" then {} else {($id_key): $id_value} end)]'
+}
+
 # ---------------------------------------------------------------------------
 # Session buffer. One JSONL file per session; each line is a redaction-verified
 # event. The buffer only ever holds clean content (capture drops events whose

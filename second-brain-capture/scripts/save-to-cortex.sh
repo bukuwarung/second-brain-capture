@@ -154,6 +154,13 @@ NOTE_FILE="$(mktemp 2>/dev/null)" || sb_save_die "mktemp failed"
 RECORD_NAME="${SAVE_TITLE} - ${AUTHOR} - ${DAY}"
 RID_FILE="${SB_SAVES_DIR}/${SAVE_SLUG}.recordid"
 RID="$(cat "$RID_FILE" 2>/dev/null)"
+CREATED_AT_FILE="${SB_SAVES_DIR}/${SAVE_SLUG}.created_at"
+CREATED_AT="$(sb_existing_created_at_or_now "$CREATED_AT_FILE")"
+UPDATED_AT="$(sb_utc_now)"
+LAST_MODIFIED_MS="$(sb_epoch_ms_now)"
+NOTE_FILE_PATH="${SAVE_SLUG}.md"
+FILES_META="$(sb_note_files_metadata "$NOTE_FILE_PATH" "$LAST_MODIFIED_MS" "$AUTHOR" "$CREATED_AT" "$UPDATED_AT" "manual-save" "save_slug" "$SAVE_SLUG")"
+[ -n "$FILES_META" ] || sb_save_die "could not build upload metadata"
 
 if [ "$DRY_RUN" = "1" ]; then
   jq -nc --arg slug "$SAVE_SLUG" --arg kb "$SB_KB_ID" --arg rid "${RID:-}" \
@@ -175,9 +182,19 @@ if [ -n "$RID" ]; then
   HTTP="$(curl -sS --max-time 60 -o "$RESP_FILE" -w '%{http_code}' \
     -X PUT "$(sb_record_update_url "$RID")" \
     -H "Authorization: Bearer ${TOKEN}" \
-    -F "file=@${NOTE_FILE};type=text/markdown;filename=${SAVE_SLUG}.md" \
+    -F "file=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
     -F "recordName=${RECORD_NAME}" \
+    -F "files_metadata=${FILES_META}" \
     2>/dev/null)" || HTTP=""
+  if [ "$HTTP" = "400" ] || [ "$HTTP" = "422" ]; then
+    sb_log "save: update rejected files_metadata (http=$HTTP) for slug $SAVE_SLUG; retrying without metadata"
+    HTTP="$(curl -sS --max-time 60 -o "$RESP_FILE" -w '%{http_code}' \
+      -X PUT "$(sb_record_update_url "$RID")" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -F "file=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
+      -F "recordName=${RECORD_NAME}" \
+      2>/dev/null)" || HTTP=""
+  fi
   if [ "$HTTP" = "404" ]; then
     sb_log "save: record $RID gone (404) for slug $SAVE_SLUG; recreating"
     rm -f "$RID_FILE"; RID=""
@@ -187,18 +204,28 @@ if [ -n "$RID" ]; then
 fi
 
 if [ -z "$RID" ]; then
-  FILES_META="$(jq -nc --arg fp "${SAVE_SLUG}.md" --argjson lm "$(( $(date +%s) * 1000 ))" \
-    '[{file_path:$fp, last_modified:$lm}]')"
   HTTP="$(curl -sS --max-time 60 -o "$RESP_FILE" -w '%{http_code}' \
     -X POST "$(sb_upload_url)" \
     -H "Authorization: Bearer ${TOKEN}" \
-    -F "files=@${NOTE_FILE};type=text/markdown;filename=${SAVE_SLUG}.md" \
+    -F "files=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
     -F "recordName=${RECORD_NAME}" \
     -F "recordType=FILE" \
     -F "origin=UPLOAD" \
     -F "isVersioned=true" \
     -F "files_metadata=${FILES_META}" \
     2>/dev/null)" || HTTP=""
+  if [ "$HTTP" = "400" ] || [ "$HTTP" = "422" ]; then
+    sb_log "save: create rejected files_metadata (http=$HTTP) for slug $SAVE_SLUG; retrying without metadata"
+    HTTP="$(curl -sS --max-time 60 -o "$RESP_FILE" -w '%{http_code}' \
+      -X POST "$(sb_upload_url)" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -F "files=@${NOTE_FILE};type=text/markdown;filename=${NOTE_FILE_PATH}" \
+      -F "recordName=${RECORD_NAME}" \
+      -F "recordType=FILE" \
+      -F "origin=UPLOAD" \
+      -F "isVersioned=true" \
+      2>/dev/null)" || HTTP=""
+  fi
   if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then
     RID="$(jq -r '.records[0]._key // .records[0].id // empty' "$RESP_FILE" 2>/dev/null)"
     [ -n "$RID" ] && printf '%s' "$RID" > "$RID_FILE" 2>/dev/null
@@ -211,6 +238,7 @@ if [ -z "$STATUS" ]; then
   sb_save_die "upload failed (http=${HTTP:-none}${ERR:+: $ERR})"
 fi
 
+sb_persist_created_at "$CREATED_AT_FILE" "$CREATED_AT"
 printf '%s\t%s\t%s\t%s\n' "$CONTENT_HASH" "${RID:-unknown}" "$SAVE_SLUG" "$(date -u +%FT%TZ)" >> "$SB_SAVE_LEDGER" 2>/dev/null
 sb_log "save: $STATUS record ${RID:-?} slug=$SAVE_SLUG kb=$SB_KB_ID bytes=$SAVE_BYTES"
 jq -nc --arg st "$STATUS" --arg rid "${RID:-}" --arg slug "$SAVE_SLUG" --arg kb "$SB_KB_ID" \
