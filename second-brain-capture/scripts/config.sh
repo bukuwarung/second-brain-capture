@@ -291,6 +291,12 @@ sb_upload_url() {
 sb_record_update_url() {
   printf '%s/api/v1/knowledgeBase/record/%s' "${SB_CORTEX_URL}" "${1}"
 }
+# Usage route — upserts ONE structured usage row per session (analytics: tokens,
+# redacted inputs, summary, author). Reuses the note's kb:write token. Best-effort
+# (the flush never fails on a usage error). Server upserts keyed by session id.
+sb_usage_url() {
+  printf '%s/api/v1/knowledgeBase/usage' "${SB_CORTEX_URL}"
+}
 
 # ---------------------------------------------------------------------------
 # Author attribution. A client-credentials principal is single-identity, so the
