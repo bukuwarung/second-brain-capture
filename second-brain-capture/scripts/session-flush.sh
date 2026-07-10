@@ -180,6 +180,46 @@ sb_try_llm_upgrade() {  # $1 = record id to update in place
   return 0
 }
 
+# Emit ONE structured per-session usage row to Cortex (analytics: token totals,
+# redacted inputs, summary, author). Best-effort and fail-OPEN: any error — incl.
+# a 404 against a Cortex that predates the /usage route — is logged and ignored,
+# so it can NEVER block or fail the note flush. Content is built only from the
+# redaction-verified buffer ($BODY, UserPrompt inputs) plus numeric token totals,
+# so it inherits the same fail-closed guarantee as the note. Server upserts by
+# session id (one row per session, updated each flush).
+sb_emit_usage() {  # $1 = note record id (may be empty)
+  local rid="$1" tokens_json inputs_json payload http
+  [ -n "$SB_CORTEX_URL" ] || return 0
+  tokens_json="$(sb_token_usage_json "$TRANSCRIPT_PATH")"; [ -n "$tokens_json" ] || tokens_json='{}'
+  inputs_json="$(jq -rs '[ .[] | select(.tool=="UserPrompt") | .input ]' "$BUFFER" 2>/dev/null)"
+  [ -n "$inputs_json" ] || inputs_json='[]'
+  payload="$(jq -nc \
+    --arg sid "$SESSION_ID" \
+    --arg author "$AUTHOR" \
+    --arg author_email "$(sb_author_email "$AUTHOR")" \
+    --arg username "$(sb_username "$AUTHOR")" \
+    --argjson tokens "$tokens_json" \
+    --argjson inputs "$inputs_json" \
+    --arg summary "$BODY" \
+    --arg source "second-brain-capture" \
+    --arg plugin_version "$(sb_plugin_version)" \
+    --arg note_id "$rid" \
+    '{sessionId:$sid, author:$author, authorEmail:$author_email, username:$username,
+      tokens:$tokens, inputs:$inputs, summary:$summary, source:$source,
+      pluginVersion:$plugin_version, noteRecordId:$note_id}' 2>/dev/null)"
+  [ -n "$payload" ] || { sb_log "flush: could not build usage payload for $SESSION_ID"; return 0; }
+  http="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+    -X POST "$(sb_usage_url)" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null)" || http=""
+  case "$http" in
+    200 | 201) sb_log "flush: usage row upserted for $SESSION_ID" ;;
+    *) sb_log "flush: usage upsert skipped (http=${http:-none}) for $SESSION_ID" ;;
+  esac
+  return 0
+}
+
 NOTE_FILE="$(mktemp 2>/dev/null)" || { [ "$SB_HAVE_LOCK" = "1" ] && sb_release_flush_lock "$SESSION_ID"; exit 0; }
 RESP_FILE=""
 NOTE_FILE2=""
@@ -295,6 +335,10 @@ if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then
   # timeout disaster, and always AFTER the digest push so it's off the critical
   # path. The digest above has already landed regardless of what happens here.
   EFF_RID="${RID:-${NEW_RID:-}}"
+
+  # Structured per-session usage row (analytics). Best-effort; never blocks flush.
+  sb_emit_usage "$EFF_RID"
+
   if [ "$FINAL" != "1" ] && [ -n "$EFF_RID" ] && sb_should_upgrade_now "$SESSION_ID"; then
     sb_try_llm_upgrade "$EFF_RID"
   fi

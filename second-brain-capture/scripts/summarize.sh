@@ -150,6 +150,27 @@ sb_token_usage() {
   ' "$tp" 2>/dev/null
 }
 
+# JSON sibling of sb_token_usage for the structured usage payload: same
+# dedup-by-message-id pipeline, but emits EXACT integer totals (summed across all
+# models) as a compact JSON object instead of the K/M-rounded markdown. Pure
+# numbers — no content, nothing to redact. Always echoes valid JSON ('{}' on an
+# unreadable transcript).
+sb_token_usage_json() {
+  local tp="$1"
+  [ -n "$tp" ] && [ -r "$tp" ] || { printf '{}'; return 1; }
+  jq -cs '
+    [ .[] | select(.type=="assistant" and .message.usage) ]
+    | group_by(.message.id // .uuid) | map(.[-1])          # dedup streamed rewrites
+    | map(.message.usage)
+    | { input:      (map(.input_tokens // 0)                | add // 0),
+        output:     (map(.output_tokens // 0)               | add // 0),
+        cacheRead:  (map(.cache_read_input_tokens // 0)     | add // 0),
+        cacheWrite: (map(.cache_creation_input_tokens // 0) | add // 0),
+        requests:   length }
+    | .total = (.input + .output + .cacheRead + .cacheWrite)
+  ' "$tp" 2>/dev/null || printf '{}'
+}
+
 # `claude -p` headless. Sets SECOND_BRAIN_SUMMARIZING=1 so the recursion guard
 # in capture-event.sh and session-flush.sh keeps the inner session from
 # re-capturing itself. --disallowedTools blocks every code-using tool — the
